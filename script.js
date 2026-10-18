@@ -1,50 +1,57 @@
-import { firebaseConfig } from "./firebase-config.js?v=7";
+import { firebaseConfig } from "./firebase-config.js?v=8";
 
 /* =====================================================================
    설정값 (숫자만 바꾸면 됩니다)
+   "firebase-rules.json 과 같아야 함"이라고 적힌 숫자는 규칙 파일의 같은 숫자도 함께 고쳐야 해요.
+   (규칙이 서버에서 이 숫자들로 속임수를 막기 때문이에요.)
    ===================================================================== */
 
-// 한국 구간 목표: 인천 → 뉴델리, 중급 항공사(에어인디아 직항) 편도 약 387,000원 (2026-10-14 기준)
+// 한국 구간 목표: 인천 → 뉴델리, 중급 항공사(에어인디아 직항) 편도 약 387,000원 (2026-10-14 기준) — 규칙과 같아야 함
 const GOAL_KRW = 387000;
-// 인도 구간 목표: 뉴델리 → 인천, 최고급 항공사(대한항공 직항) 편도 약 52,400루피 (2026-10-15 기준)
+// 인도 구간 목표: 뉴델리 → 인천, 최고급 항공사(대한항공 직항) 편도 약 52,400루피 (2026-10-15 기준) — 규칙과 같아야 함
 const GOAL_INR = 52400;
-// 무인도 탈출 목표: 1달러씩 모아 1,000,000달러
+// 무인도 탈출 목표: 1,000,000 조개껍질 — 규칙과 같아야 함
 const ISLAND_GOAL = 1000000;
 
-// 피버타임: 접속한 모든 사람의 클릭이 하나의 게이지를 채웁니다. (한국·인도·무인도 공통)
-// 300번이 모이면 모두에게 동시에 시작되고 5초 동안 클릭 한 번이 배로 늘어납니다.
-// 게이지 숫자를 바꾸면 firebase-rules.json 의 300 도 함께 고쳐 주세요.
-const FEVER_CLICKS = 300;
-const FEVER_MULT = 100;         // 한국(원)·인도(루피)
-const FEVER_MULT_ISLAND = 500;  // 무인도(달러)
-const FEVER_MS = 5000;
-const FLUSH_MS = 300; // 클릭을 모아서 서버로 보내는 간격
+// 한 구간(한국 모금 → 비행, 인도 모금 → 비행)은 아무리 빨리 모아도 이 시간(밀리초)이 지나야 출발해요. — 규칙과 같아야 함
+// (모금액을 한꺼번에 채워 비행을 계속 반복시키는 속임수를 막아요.)
+const MIN_LEG_MS = 3 * 60 * 1000;
 
-// 비행 (밀리초). 모든 방문자 화면에서 같은 순간에 같은 장면이 나옵니다.
+// 피버타임: 접속한 모든 사람의 클릭이 하나의 게이지를 채웁니다. (한국·인도·무인도 공통)
+const FEVER_CLICKS = 300;          // 이만큼 모이면 시작 — 규칙과 같아야 함
+const FEVER_MULT = 100;            // 한국(원)·인도(루피)에서 클릭 배수
+const FEVER_MULT_ISLAND = 10;      // 무인도(조개껍질)에서 클릭 배수
+const FEVER_MS = 5000;             // 피버타임 길이
+const FEVER_COOLDOWN_MS = 30000;   // 피버타임이 끝난 뒤 다시 시작하려면 기다려야 하는 시간 — 규칙과 같아야 함
+const FEVER_MAX_WRITE = 40;        // 한 번에 서버로 보낼 수 있는 클릭 수 — 규칙과 같아야 함
+const FLUSH_MS = 300;              // 클릭을 모아서 서버로 보내는 간격
+
+// 비행 (밀리초). 모든 방문자 화면에서 같은 순간에 같은 장면이 나옵니다. (규칙의 11000 / 8000 은 이 값에서 1초를 뺀 값)
 const JOURNEY = {
   fly: 8000,    // 비행 시간
   land: 4000,   // 도착 메시지를 보여 주는 시간
   rescue: 5000, // 무인도에서 탈출한 뒤 남은 거리를 날아가는 시간
 };
 
-// 추락: 비행을 시작할 때 이 확률로 도중에 추락합니다.
+// 추락: 비행이 시작된 "서버 시각"의 밀리초가 0~29이면 추락해요 (1000분의 30 = 3%). — 규칙과 같아야 함
+// 시각은 서버가 정해 주기 때문에 컴퓨터로 조작해서 추락을 피하거나 일으킬 수 없어요.
 const CRASH = {
-  chance: 0.25,   // 비행 4번 중 1번 꼴
-  minFrac: 0.3,   // 비행의 30% ~ 70% 지점 사이에서 추락
-  maxFrac: 0.7,
+  permille: 30,
+  minFrac: 0.3,   // 비행의 30% ~ 70% 지점 사이에서 추락 (지점도 시작 시각으로 정해져요)
+  span: 41,
   anim: 2800,     // 추락 장면 길이
 };
+const isCrashStart = (startAt) => Number.isFinite(startAt) && startAt % 1000 < CRASH.permille;
+const crashFracOf = (startAt) => CRASH.minFrac + (Math.floor(startAt / 1000) % CRASH.span) / 100;
 
 const PHOTO1 = "photo1.jpg"; // 한국 쪽에 있을 때
 const PHOTO2 = "photo2.jpg"; // 인도 쪽에 있을 때
 
-// 자동 클릭 방지
+// 자동 클릭 방지: 1초 안에 maxCps 번 이상 누르면 빨간 화면이 덮이고 사이트에서 나가져요.
 const GUARD = {
-  maxCps: 20,            // 1초에 이 횟수 이상 누르면 의심
-  answerMs: 5000,        // 경고가 뜬 뒤 응답해야 하는 시간
-  maxWarnings: 3,        // 이만큼 쌓이면 버튼이 날아다님
-  flyMs: 10 * 60 * 1000, // 버튼이 날아다니는 시간 (10분)
-  minAnswerMs: 250,      // 이보다 빠른 응답은 기계로 보고 무시
+  maxCps: 4,
+  exitDelayMs: 1200,   // 빨간 화면을 보여 준 뒤 나가기까지 시간
+  banMs: 0,            // 나간 뒤 다시 들어와도 막을 시간 (0이면 바로 다시 들어올 수 있어요. 10분은 10 * 60 * 1000)
 };
 
 // 지도 (지도 사진 764×513 기준 좌표)
@@ -56,45 +63,50 @@ const MAP = {
   h: 513,
 };
 
-const GUARD_KEY = "ahnireong-guard";
-const LOCAL_KEY = "ahnireong-local-v4";
-const LOCAL_FEVER_KEY = "ahnireong-fever-local-v4";
+const GUARD_KEY = "ahnireong-kick-v3";
+const LOCAL_KEY = "ahnireong-local-v5";
+const LOCAL_FEVER_KEY = "ahnireong-fever-local-v5";
+const ACCOUNT_KEY = "ahnireong-account-v3"; // 이 기기에 저장되는 이어하기 코드
+const PLAYER_KEY = "ahnireong-player-v3";   // 이 기기에 저장되는 내 데이터 사본
+// 예전 버전이 남긴 저장값 (새 버전에서는 쓰지 않아 지워요 = 모두 처음부터)
+const OLD_KEYS = ["ahnireong-player", "ahnireong-account", "ahnireong-me", "ahnireong-guard",
+  "ahnireong-local-v4", "ahnireong-fever-local-v4", "ahnireong-local-v3", "ahnireong-fever-local-v3"];
 
-const UNIT = { krw: "원", inr: "루피", usd: "달러" };
-const UNIT_OBJ = { krw: "원을", inr: "루피를", usd: "달러를" }; // "~을/를" 조사까지 붙인 형태
-
+const UNIT = { krw: "원", inr: "루피", shell: "조개껍질" };
+const UNIT_OBJ = { krw: "원을", inr: "루피를", shell: "조개껍질을" }; // "~을/를" 조사까지 붙인 형태
 
 // 사이트 버전 (화면 맨 아래에 표시돼요. 앱마다 서로 다른 버전을 보고 있는지 확인할 때 쓰세요.)
-const VERSION = 7;
+const VERSION = 8;
 
-// 환전: 1원 = 15루피, 1달러 = 1,500원 (루피를 1로 놓았을 때의 값)
-const RATE = { inr: 1, krw: 15, usd: 22500 };
+// 환전: 1원 = 15루피, 1조개껍질 = 0.1원 (루피 0.5개를 1로 놓은 정수 값)
+const RATE = { shell: 3, inr: 2, krw: 30 };
 
 // 상점 (가격은 모두 원)
 const SHOP = {
-  boostPrice: 1000,           // 5배 부스트 5분
-  boostMult: 5,
+  boostPrice: 10000,          // 3배 부스트 5분
+  boostMult: 3,
   boostMs: 5 * 60 * 1000,
-  permPrice: 1000000,         // 영구 ×10
-  meetPrice: 100000000,       // 안이령과 만나기 (아직 준비중이라 살 수는 없어요)
+  permPrice: 10000000,        // 영구 ×10
   permMult: 10,
+  meetPrice: 100000000,       // 안이령과 만나기 (아직 준비중이라 살 수는 없어요)
 };
 
 // 은행
 const BANK = {
-  rate: 0.0001,                           // 이자: 12시간에 0.01% (통장과 대출 모두)
+  rate: 0.04,                           // 이자: 12시간에 4% (통장과 대출 모두)
   periodMs: 12 * 60 * 60 * 1000,
   loanDueMs: 24 * 60 * 60 * 1000,       // 대출 만기: 빌린 뒤 24시간
   startCredit: 500,                     // 처음 신용 점수
   maxCredit: 1000,
-  limitPerPoint: 1000,                  // 신용 1점당 대출 한도 1,000원 상당
+  limitPerPoint: 2000,                  // 신용 1점당 대출 한도 2,000원 상당 (500점이면 최대 한도)
+  maxLoanKrw: 1000000,                  // 은행마다 최대 대출: 1,000,000원 상당 (소수점은 버려요)
   repayBonus: 20,                       // 만기 안에 다 갚으면 +20점
   latePenalty: 40,                      // 연체 12시간마다 -40점
 };
 const BANKS = [
   { key: "krw", name: "한국은행", unit: "원" },
   { key: "inr", name: "인도은행", unit: "루피" },
-  { key: "usd", name: "미국은행", unit: "달러" },
+  { key: "shell", name: "조개껍질 은행", unit: "조개껍질" },
 ];
 
 // 랭킹
@@ -105,8 +117,6 @@ const CATS = [
   { key: "donated", label: "누적 기부액", fmt: (n) => `${won(n)}원 상당` },
 ];
 
-const ACCOUNT_KEY = "ahnireong-account"; // 이 기기에 저장되는 이어하기 코드
-const PLAYER_KEY = "ahnireong-player";   // 이 기기에 저장되는 내 데이터 사본
 /* =====================================================================
    화면 요소
    ===================================================================== */
@@ -132,11 +142,10 @@ const els = {
   feverText: $("feverText"),
   feverFill: $("feverFill"),
   units: document.querySelectorAll(".unit"),
-  guardInfo: $("guardInfo"),
-  guard: $("guard"),
-  guardText: $("guardText"),
-  guardFill: $("guardFill"),
-  guardBtn: $("guardBtn"),
+  kick: $("kick"),
+  kickText: $("kickText"),
+  confetti: $("confetti"),
+  dock: document.querySelector(".dock"),
   mapBtn: $("mapBtn"),
   mapDialog: $("mapDialog"),
   mapClose: $("mapClose"),
@@ -178,17 +187,18 @@ function defaultPlayer() {
   return {
     v: 1,
     name: "",                                   // 랭킹 이름 (비어 있으면 미등록)
-    wallet: { krw: 0, inr: 0, usd: 0 },         // 지갑
-    mine: { krw: 0, inr: 0, usd: 0 },           // 내가 기부한 돈
+    wallet: { krw: 0, inr: 0, shell: 0 },       // 지갑
+    mine: { krw: 0, inr: 0, shell: 0 },         // 내가 기부한 돈
     clicks: 0,                                  // 누적 클릭 수
     donatedKrw: 0,                              // 누적 기부액 (원 환산)
     perm10: false,                              // 영구 ×10 보유
-    boostUntil: 0,                              // 5배 부스트가 끝나는 시각
-    bank: { krw: 0, inr: 0, usd: 0 },           // 은행 통장 잔액
-    bankAt: { krw: 0, inr: 0, usd: 0 },         // 이자를 마지막으로 합친 시각
-    loan: { krw: null, inr: null, usd: null },  // 대출 { owed, dueAt, accAt, lateApplied }
+    boostUntil: 0,                              // 3배 부스트가 끝나는 시각
+    bank: { krw: 0, inr: 0, shell: 0 },         // 은행 통장 잔액
+    bankAt: { krw: 0, inr: 0, shell: 0 },       // 이자를 마지막으로 합친 시각
+    loan: { krw: null, inr: null, shell: null },// 대출 { owed, dueAt, accAt, lateApplied }
     credit: BANK.startCredit,                   // 신용 점수
     moneyResetSeen: 0,                          // 마지막으로 반영한 "돈 초기화" 번호
+    passResetSeen: 0,                           // 마지막으로 반영한 "게임패스 초기화" 번호
     updatedAt: 0,
   };
 }
@@ -198,7 +208,7 @@ function normalizePlayer(raw) {
   const d = defaultPlayer();
   if (!raw || typeof raw !== "object") return d;
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
-  const trio = (o) => ({ krw: num(o && o.krw), inr: num(o && o.inr), usd: num(o && o.usd) });
+  const trio = (o) => ({ krw: num(o && o.krw), inr: num(o && o.inr), shell: num(o && o.shell) });
   d.name = typeof raw.name === "string" ? raw.name.slice(0, 12) : "";
   d.wallet = trio(raw.wallet);
   d.mine = trio(raw.mine);
@@ -208,7 +218,7 @@ function normalizePlayer(raw) {
   d.boostUntil = num(raw.boostUntil);
   d.bank = trio(raw.bank);
   d.bankAt = trio(raw.bankAt);
-  for (const k of ["krw", "inr", "usd"]) {
+  for (const k of ["krw", "inr", "shell"]) {
     const l = raw.loan && raw.loan[k];
     d.loan[k] = l && num(l.owed) > 0
       ? { owed: num(l.owed), dueAt: num(l.dueAt), accAt: num(l.accAt), lateApplied: Math.floor(num(l.lateApplied)) }
@@ -217,6 +227,7 @@ function normalizePlayer(raw) {
   const c = Number(raw.credit);
   d.credit = Number.isFinite(c) ? Math.min(Math.max(Math.floor(c), 0), BANK.maxCredit) : BANK.startCredit;
   d.moneyResetSeen = Math.floor(num(raw.moneyResetSeen));
+  d.passResetSeen = Math.floor(num(raw.passResetSeen));
   d.updatedAt = num(raw.updatedAt);
   return d;
 }
@@ -233,11 +244,13 @@ let busy = false;
 //   leg 0: 한국에서 원으로 모금 → 인도행 비행
 //   leg 1: 인도에서 루피로 모금 → 한국행 비행
 //   leg 2: 다시 한국에서 원으로 모금 ... (반복)
-// 비행 도중 추락하면 무인도에서 달러로 모금해 탈출한 뒤, 원래 가던 곳으로 다시 날아갑니다.
+// 비행 도중 추락하면 무인도에서 조개껍질로 모금해 탈출한 뒤, 원래 가던 곳으로 다시 날아갑니다.
 // 모금액은 "누적 합계"로 저장해서 줄어드는 일이 없습니다.
-let donated = { krw: 0, inr: 0, usd: {} }; // usd: { "L0": 이번 무인도에서 모인 달러, ... }
+let donated = { krw: 0, inr: 0 };
+let island = { leg: -1, amt: 0 }; // 지금 무인도에서 모인 조개껍질
 let leg = 0;
-let trip = null; // { leg, startAt, crash(0이면 추락 없음), escapedAt(0이면 아직 탈출 전) }
+let legAt = 0;   // 이번 구간이 시작된 서버 시각
+let trip = null; // { leg, startAt, escapedAt } — 추락 여부와 지점은 startAt 으로 정해져요
 let tripStarting = false;
 let escaping = false;
 let advancing = false;
@@ -264,9 +277,12 @@ const isFever = () => serverNow() < fever.endAt;
 const getShared = () =>
   Math.max(0, Math.min(totalOfLeg(leg) - baseOfLeg(leg), goalOfLeg(leg)));
 
-// 이번 무인도에서 모인 달러 (0 ~ 1,000,000)
+// 이번 무인도에서 모인 조개껍질 (0 ~ 1,000,000)
 const islandShared = () =>
-  Math.max(0, Math.min(nonNeg((donated.usd || {})["L" + leg]), ISLAND_GOAL));
+  island.leg === leg ? Math.max(0, Math.min(nonNeg(island.amt), ISLAND_GOAL)) : 0;
+
+// 지금 비행이 추락하는 비행인지, 어디서 추락하는지 (추락하지 않으면 0)
+const tripCrash = (t = trip) => (t && isCrashStart(t.startAt) ? crashFracOf(t.startAt) : 0);
 
 // ---- 내 지갑 ----
 const walletOfKind = (k) => player.wallet[k];
@@ -312,19 +328,6 @@ function loadPlayerLocal() {
     const raw = JSON.parse(localStorage.getItem(PLAYER_KEY));
     if (raw) return normalizePlayer(raw);
   } catch (e) { /* 무시 */ }
-  try { // 예전 버전(지갑만 저장하던 때)의 기록 이어받기
-    const old = JSON.parse(localStorage.getItem("ahnireong-me"));
-    if (old) {
-      const p = defaultPlayer();
-      p.wallet.krw = nonNeg(old.walletKrw !== undefined ? old.walletKrw : old.wallet);
-      p.wallet.inr = nonNeg(old.walletInr);
-      p.wallet.usd = nonNeg(old.walletUsd);
-      p.mine.krw = nonNeg(old.mineKrw !== undefined ? old.mineKrw : old.mine);
-      p.mine.inr = nonNeg(old.mineInr);
-      p.mine.usd = nonNeg(old.mineUsd);
-      return p;
-    }
-  } catch (e) { /* 무시 */ }
   return defaultPlayer();
 }
 
@@ -352,12 +355,14 @@ function journeyState() {
   const origin = leg % 2 === 0 ? 0 : 1;
   const dest = 1 - origin;
   if (!(trip && trip.leg === leg)) {
-    return getShared() >= goalOfLeg(leg)
-      ? { phase: "boarding", p: origin }
-      : { phase: "funding", p: origin };
+    if (getShared() >= goalOfLeg(leg)) {
+      // 모금은 끝났지만, 구간마다 최소 시간(MIN_LEG_MS)이 지나야 출발해요.
+      return { phase: "boarding", p: origin, wait: Math.max(legAt + MIN_LEG_MS - serverNow(), 0) };
+    }
+    return { phase: "funding", p: origin };
   }
 
-  const crash = trip.crash > 0 ? trip.crash : 0;
+  const crash = tripCrash();
   const e = Math.max(serverNow() - trip.startAt, 0);
   const flyEnd = crash ? JOURNEY.fly * crash : JOURNEY.fly;
 
@@ -386,7 +391,7 @@ function journeyState() {
 // 지금 쓰는 돈의 종류와 목표, 모인 금액
 function ctxOf(st) {
   if (st.phase === "island" || st.phase === "escaping") {
-    return { kind: "usd", unit: UNIT.usd, goal: ISLAND_GOAL, shared: islandShared(), mult: FEVER_MULT_ISLAND };
+    return { kind: "shell", unit: UNIT.shell, goal: ISLAND_GOAL, shared: islandShared(), mult: FEVER_MULT_ISLAND };
   }
   const kind = leg % 2 === 0 ? "krw" : "inr";
   return { kind, unit: UNIT[kind], goal: goalOfLeg(leg), shared: getShared(), mult: FEVER_MULT };
@@ -417,11 +422,11 @@ function render() {
   els.donateBtn.disabled = busy || wallet === 0 || remaining === 0;
   els.ticket.classList.toggle("arrived", remaining === 0);
   els.ticket.classList.toggle("in-india", ctx.kind === "inr");
-  els.ticket.classList.toggle("on-island", ctx.kind === "usd");
+  els.ticket.classList.toggle("on-island", ctx.kind === "shell");
   renderPerks();
 }
 
-function messageFor(phase) {
+function messageFor(phase, st) {
   const toIndia = leg % 2 === 0;
   const destTo = toIndia ? "인도 뉴델리로" : "충남 홍성으로";
   switch (phase) {
@@ -429,10 +434,12 @@ function messageFor(phase) {
       return toIndia
         ? "안이령이 충남 홍성군 내포신도시에서 출발을 기다리고 있어요. 원을 모아 인도행 비행기 값을 채워 주세요!"
         : "안이령이 인도 뉴델리에 있어요! 이제 루피를 모아 한국행 비행기 값을 채워 주세요.";
-    case "boarding":
-      return toIndia
-        ? "목표 달성! 안이령이 비행기에 탑승했어요. 곧 출발합니다!"
-        : "목표 달성! 안이령이 한국행 비행기에 탑승했어요. 곧 출발합니다!";
+    case "boarding": {
+      const wait = st && st.wait > 0 ? ` 출발까지 ${fmtClock(st.wait)}` : " 곧 출발합니다!";
+      return (toIndia
+        ? "목표 달성! 안이령이 비행기에 탑승했어요."
+        : "목표 달성! 안이령이 한국행 비행기에 탑승했어요.") + wait;
+    }
     case "flying":
       return toIndia
         ? "안이령이 인도 뉴델리로 날아가는 중이에요…"
@@ -440,7 +447,7 @@ function messageFor(phase) {
     case "crashing":
       return "무인도에 추락했습니다";
     case "island":
-      return `안이령이 무인도에 갇혔어요! 달러를 1달러씩 모아 ${won(ISLAND_GOAL)}달러를 채우면 탈출할 수 있어요.`;
+      return `안이령이 무인도에 갇혔어요! 조개껍질을 1개씩 모아 ${won(ISLAND_GOAL)}조개껍질을 채우면 탈출할 수 있어요.`;
     case "escaping":
       return "탈출 비용이 모두 모였어요! 구조 비행기가 곧 출발합니다.";
     case "rescue":
@@ -466,6 +473,7 @@ function setPhoto(which) {
 }
 
 let lastKey = "";
+let lastBoardSec = -1;
 function renderJourney() {
   const st = journeyState();
   const { phase, p } = st;
@@ -481,16 +489,25 @@ function renderJourney() {
 
   const key = phase + ":" + leg;
   if (key !== lastKey) {
+    const first = lastKey === "";
     lastKey = key;
-    els.journeyMsg.textContent = messageFor(phase);
+    lastBoardSec = -1;
+    els.journeyMsg.textContent = messageFor(phase, st);
     els.journeyMsg.dataset.phase = arrivedPhase ? "arrived" : phase === "crashing" ? "crash" : phase;
-    render();       // 장면이 바뀌면 돈의 종류(원·루피·달러)도 바뀔 수 있음
+    render();       // 장면이 바뀌면 돈의 종류(원·루피·조개껍질)도 바뀔 수 있음
     renderFever();
+    // 모금액을 다 모았을 때(또는 무인도 탈출 비용을 다 모았을 때) 폭죽!
+    if (!first && (phase === "boarding" || phase === "escaping")) fireConfetti();
+  }
+  if (phase === "boarding") { // 출발 대기 카운트다운은 1초마다 갱신
+    const sec = Math.ceil(st.wait / 1000);
+    if (sec !== lastBoardSec) { lastBoardSec = sec; els.journeyMsg.textContent = messageFor(phase, st); }
   }
 
   // 비행 시작, 탈출, 다음 구간 시작은 누군가 한 명이 서버에 기록해 주면 모두에게 반영됩니다.
+  // (서버 규칙이 시간·모금액을 다시 확인하기 때문에, 조건이 안 맞으면 서버가 거부해요.)
   if (!backend) return;
-  if (phase === "boarding" && !tripStarting) {
+  if (phase === "boarding" && st.wait === 0 && !tripStarting) {
     tripStarting = true;
     backend.startTrip(leg).catch(() => {}).finally(() => {
       setTimeout(() => { tripStarting = false; }, 1500);
@@ -521,14 +538,17 @@ function journeyLoop() {
    ===================================================================== */
 
 // 클릭 n번을 반영한 새 피버타임 상태를 계산합니다. (서버 트랜잭션과 연습 모드가 함께 씁니다.)
+// 서버 규칙(firebase-rules.json)과 똑같은 순서로 판단해야 해요:
+//   ① 진행 중이면 게이지는 고정 ② 게이지가 가득 차 있고 쉬는 시간이 끝났으면 시작 ③ 아니면 게이지만 올림
 function applyClicks(cur, n, now) {
   const count = clampCount(cur && cur.count);
   const endAt = Number(cur && cur.endAt) || 0;
-  if (endAt > now) return { count, endAt };          // 피버타임 중에는 게이지가 오르지 않음
-  const next = count + n;
-  if (next >= FEVER_CLICKS) return { count: 0, endAt: now + FEVER_MS };
-  return { count: next, endAt };
+  if (endAt > now) return { count, endAt };
+  if (count >= FEVER_CLICKS && now >= endAt + FEVER_COOLDOWN_MS) return { count: 0, endAt: now + FEVER_MS };
+  return { count: Math.min(count + n, FEVER_CLICKS), endAt };
 }
+
+let feverStarting = false;
 
 function renderFever() {
   const now = serverNow();
@@ -555,11 +575,20 @@ function renderFever() {
     els.earnBtn.textContent = `${won(clickValue(ctx, true))}${ctx.unit} 벌기`;
   } else {
     const shown = Math.min(fever.count + pending, FEVER_CLICKS);
+    const coolLeft = Math.max(fever.endAt + FEVER_COOLDOWN_MS - now, 0);
     els.feverFill.style.width = (shown / FEVER_CLICKS) * 100 + "%";
     els.feverText.textContent = feverFailed
       ? `${shown} / ${FEVER_CLICKS}번 (서버에 저장되지 않고 있어요. Firebase 규칙을 확인해 주세요)`
-      : `${shown} / ${FEVER_CLICKS}번 (안이령이 인도로 하루 빨리 가게 도와주는 버튼입니다.)`;
+      : shown >= FEVER_CLICKS && coolLeft > 0
+        ? `${FEVER_CLICKS} / ${FEVER_CLICKS}번 (다음 피버타임까지 ${Math.ceil(coolLeft / 1000)}초)`
+        : `${shown} / ${FEVER_CLICKS}번 (안이령이 인도로 하루 빨리 가게 도와주는 버튼입니다.)`;
     els.earnBtn.textContent = `${won(clickValue(ctx, false))}${ctx.unit} 벌기`;
+
+    // 게이지가 가득 차고 쉬는 시간이 끝났으면 누구든 한 명이 시작을 서버에 알려 줍니다.
+    if (backend && fever.count >= FEVER_CLICKS && coolLeft === 0 && !feverStarting) {
+      feverStarting = true;
+      backend.addClicks(0).catch(() => {}).finally(() => { setTimeout(() => { feverStarting = false; }, 1500); });
+    }
   }
 }
 
@@ -575,8 +604,8 @@ async function flush() {
   if (!backend) { scheduleFlush(500); return; }
 
   flushing = true;
-  const n = pending;
-  pending = 0;
+  const n = Math.min(pending, FEVER_MAX_WRITE); // 서버 규칙: 한 번에 많이 보낼 수 없어요
+  pending -= n;
   let ok = true;
   try {
     await backend.addClicks(n);
@@ -594,195 +623,134 @@ async function flush() {
 /* =====================================================================
    자동 클릭 방지
    ===================================================================== */
-
-let guard = { warnings: 0, flyUntil: 0 };
+let kicked = false;
 let clickTimes = [];   // 최근 1초 동안의 클릭 시각
-let recentTimes = [];  // 최근 20번의 클릭 시각
-let guardOpen = false;
-let guardShownAt = 0;
-let guardDeadline = 0;
-let guardTimer = null;
-let lastKeyRepeat = false;
 
-document.addEventListener("keydown", (e) => { lastKeyRepeat = e.repeat; }, true);
-
-function loadGuard() {
-  try {
-    const s = JSON.parse(localStorage.getItem(GUARD_KEY));
-    if (s) guard = { warnings: nonNeg(s.warnings), flyUntil: Number(s.flyUntil) || 0 };
-  } catch (e) { /* 무시 */ }
-}
-
-function saveGuard() {
-  try { localStorage.setItem(GUARD_KEY, JSON.stringify(guard)); } catch (e) { /* 무시 */ }
-}
-
-// 이 클릭이 사람이 낼 수 없는 클릭인지 검사합니다.
+// 이 클릭이 사람이 낼 수 없는 속도인지 검사합니다.
+// (콘솔 등 코드로 만들어 낸 클릭은 isTrusted 가 false 라서 바로 걸러져요.)
 function checkClick(e) {
-  if (!e.isTrusted) return { bad: true, cps: 0 }; // 코드로 만들어 낸 클릭
+  if (!e.isTrusted) return { bad: true, cps: 0 };
 
   const t = performance.now();
   clickTimes.push(t);
   while (clickTimes.length && t - clickTimes[0] > 1000) clickTimes.shift();
   if (clickTimes.length >= GUARD.maxCps) return { bad: true, cps: clickTimes.length };
-
-  // 간격이 기계처럼 일정하게 빠른 경우
-  recentTimes.push(t);
-  if (recentTimes.length > 20) recentTimes.shift();
-  if (recentTimes.length === 20) {
-    const gaps = [];
-    for (let i = 1; i < recentTimes.length; i++) gaps.push(recentTimes[i] - recentTimes[i - 1]);
-    const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-    if (mean < 83) { // 초당 12번보다 빠르게
-      const sd = Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / gaps.length);
-      if (sd < 3) return { bad: true, cps: Math.round(1000 / mean) };
-    }
-  }
   return { bad: false };
 }
 
-function openGuard(cps) {
-  if (guardOpen) return;
-  guardOpen = true;
-  guardShownAt = performance.now();
-  guardDeadline = guardShownAt + GUARD.answerMs;
-  clickTimes = [];
-  recentTimes = [];
-  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-
-  els.guardText.textContent =
-    (cps ? `초당 약 ${cps}번 클릭했어요. ` : "코드로 만든 클릭이 감지됐어요. ") +
-    `사람이라면 ${GUARD.answerMs / 1000}초 안에 "사람이에요" 버튼을 눌러 주세요. ` +
-    `못 누르면 경고가 쌓이고, ${GUARD.maxWarnings}번 쌓이면 클릭 버튼이 ${GUARD.flyMs / 60000}분 동안 날아다녀요. ` +
-    `(지금 경고 ${guard.warnings}/${GUARD.maxWarnings})`;
-
-  // 버튼은 매번 다른 곳에 나타납니다.
-  els.guardBtn.style.left = 15 + Math.random() * 70 + "%";
-  els.guardBtn.style.top = 45 + Math.random() * 40 + "%";
-  els.guardFill.style.width = "100%";
-  els.guard.hidden = false;
-
-  clearTimeout(guardTimer);
-  guardTimer = setTimeout(guardTimeout, GUARD.answerMs);
-}
-
-function closeGuard() {
-  clearTimeout(guardTimer);
-  guardTimer = null;
-  guardOpen = false;
-  els.guard.hidden = true;
-}
-
-function onGuardConfirm(e) {
-  if (!guardOpen) return;
-  if (!e.isTrusted) return;
-  if (e.detail === 0 && lastKeyRepeat) return;                  // 키를 꾹 눌러서 통과하는 것 방지
-  if (performance.now() - guardShownAt < GUARD.minAnswerMs) return; // 너무 빠른 응답은 기계
-  closeGuard();
-  els.status.textContent = "확인됐어요. 사람으로 인정합니다!";
-}
-
-function guardTimeout() {
-  closeGuard();
-  guard.warnings += 1;
-  if (guard.warnings >= GUARD.maxWarnings) {
-    guard.warnings = 0;
-    guard.flyUntil = Date.now() + GUARD.flyMs;
-    saveGuard();
-    startFlying();
-    els.status.textContent = "경고가 3번 쌓였어요. 클릭 버튼이 10분 동안 날아다닙니다!";
-  } else {
-    saveGuard();
-    els.status.textContent = `경고 ${guard.warnings}/${GUARD.maxWarnings}: ${GUARD.answerMs / 1000}초 안에 응답하지 않았어요.`;
+// 빨간 화면이 모든 걸 가리고, 잠시 뒤 사이트에서 나가집니다.
+function kickOut(cps, fromBan) {
+  if (kicked) return;
+  kicked = true;
+  els.kickText.textContent = fromBan
+    ? "자동 클릭이 감지된 기기예요. 잠시 뒤에 다시 들어와 주세요."
+    : cps
+      ? `1초에 ${cps}번 이상 클릭해서 자동 클릭으로 판단했어요. 사이트에서 나갑니다.`
+      : "코드로 만든 클릭이 감지됐어요. 사이트에서 나갑니다.";
+  els.kick.hidden = false;
+  document.documentElement.classList.add("kicked");
+  if (GUARD.banMs > 0 && !fromBan) {
+    try { localStorage.setItem(GUARD_KEY, String(Date.now() + GUARD.banMs)); } catch (e) { /* 무시 */ }
   }
-  renderGuardInfo();
+  setTimeout(() => { location.replace("about:blank"); }, fromBan ? 300 : GUARD.exitDelayMs);
 }
 
-function renderGuard() {
-  if (!guardOpen) return;
-  const left = Math.max(guardDeadline - performance.now(), 0);
-  els.guardFill.style.width = (left / GUARD.answerMs) * 100 + "%";
+// 나간 뒤 다시 들어왔을 때, 아직 막는 시간이면 바로 빨간 화면 (banMs 가 0이면 쓰지 않아요)
+function checkBan() {
+  if (GUARD.banMs <= 0) return;
+  try {
+    if (Number(localStorage.getItem(GUARD_KEY)) > Date.now()) kickOut(0, true);
+  } catch (e) { /* 무시 */ }
 }
 
-function renderGuardInfo() {
-  const left = guard.flyUntil - Date.now();
-  if (left > 0) {
-    const sec = Math.ceil(left / 1000);
-    const mm = Math.floor(sec / 60);
-    const ss = String(sec % 60).padStart(2, "0");
-    els.guardInfo.textContent = `자동 클릭이 의심돼서 버튼이 날아다니는 중이에요. 남은 시간 ${mm}:${ss}`;
-  } else if (guard.warnings > 0) {
-    els.guardInfo.textContent =
-      `경고 ${guard.warnings}/${GUARD.maxWarnings} 누적 (${GUARD.maxWarnings}번 쌓이면 클릭 버튼이 ${GUARD.flyMs / 60000}분 동안 날아다녀요)`;
-  } else {
-    els.guardInfo.textContent = "";
-  }
-}
+/* =====================================================================
+   폭죽 (모금액을 다 모았을 때) · 모바일 메뉴 자동 숨김
+   ===================================================================== */
 
-// ----- 날아다니는 클릭 버튼 -----
-let flyActive = false;
-let flyRaf = 0;
-let flyPlaceholder = null;
-const fly = { x: 0, y: 0, vx: 0, vy: 0, turnAt: 0, last: 0 };
+let confettiRaf = 0;
+function fireConfetti() {
+  if (reduceMotion || !els.confetti) return;
+  const c = els.confetti;
+  const g = c.getContext("2d");
+  if (!g) return;
+  cancelAnimationFrame(confettiRaf);
 
-function startFlying() {
-  if (flyActive) return;
-  flyActive = true;
+  const dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  c.width = Math.floor(W * dpr);
+  c.height = Math.floor(H * dpr);
+  c.style.width = W + "px";
+  c.style.height = H + "px";
 
-  const rect = els.earnBtn.getBoundingClientRect();
-  flyPlaceholder = document.createElement("div"); // 버튼이 빠져나간 자리를 채워 화면이 흔들리지 않게 함
-  flyPlaceholder.className = "earn-ph";
-  flyPlaceholder.style.height = rect.height + "px";
-  els.earnBtn.parentNode.insertBefore(flyPlaceholder, els.earnBtn);
-
-  els.earnBtn.classList.add("flying");
-  fly.x = Math.min(Math.max(rect.left, 0), Math.max(window.innerWidth - 170, 0));
-  fly.y = Math.min(Math.max(rect.top, 0), Math.max(window.innerHeight - 64, 0));
-  fly.turnAt = 0;
-  fly.last = performance.now();
-  flyRaf = requestAnimationFrame(flyLoop);
-}
-
-function stopFlying() {
-  flyActive = false;
-  cancelAnimationFrame(flyRaf);
-  els.earnBtn.classList.remove("flying");
-  els.earnBtn.style.transform = "";
-  if (flyPlaceholder) { flyPlaceholder.remove(); flyPlaceholder = null; }
-  guard.flyUntil = 0;
-  saveGuard();
-  renderGuardInfo();
-}
-
-function flyLoop(ts) {
-  if (!flyActive) return;
-  if (Date.now() >= guard.flyUntil) { stopFlying(); return; }
-
-  const dt = Math.min((ts - fly.last) / 1000 || 0, 0.05);
-  fly.last = ts;
-
-  if (ts >= fly.turnAt) { // 방향과 속도를 불규칙하게 바꿉니다.
-    const ang = Math.random() * Math.PI * 2;
-    const speed = 180 + Math.random() * 340;
-    fly.vx = Math.cos(ang) * speed;
-    fly.vy = Math.sin(ang) * speed;
-    fly.turnAt = ts + 450 + Math.random() * 900;
+  const colors = ["#f0a030", "#1b2559", "#e5232d", "#2f9e44", "#2a8bd6", "#ffd04a", "#ff7a18"];
+  const parts = [];
+  for (let i = 0; i < 170; i++) {
+    const left = i % 2 === 0; // 양쪽 아래에서 터져 올라와요
+    parts.push({
+      x: left ? W * 0.08 : W * 0.92,
+      y: H * 0.7,
+      vx: (left ? 1 : -1) * (3 + Math.random() * 9),
+      vy: -(9 + Math.random() * 13),
+      size: 6 + Math.random() * 8,
+      rot: Math.random() * 6.28,
+      vr: (Math.random() - 0.5) * 0.4,
+      color: colors[i % colors.length],
+      shape: i % 3,
+    });
   }
 
-  const w = els.earnBtn.offsetWidth;
-  const h = els.earnBtn.offsetHeight;
-  const maxX = Math.max(window.innerWidth - w, 0);
-  const maxY = Math.max(window.innerHeight - h, 0);
+  const DURATION = 4200;
+  const start = performance.now();
+  const frame = (now) => {
+    const t = now - start;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const alpha = Math.max(0, Math.min(1, (DURATION - t) / 1200));
+    for (const p of parts) {
+      p.vy += 0.3;
+      p.vx *= 0.99;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.rot += p.vr;
+      g.save();
+      g.translate(p.x, p.y);
+      g.rotate(p.rot);
+      g.globalAlpha = alpha;
+      g.fillStyle = p.color;
+      if (p.shape === 0) g.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+      else if (p.shape === 1) { g.beginPath(); g.arc(0, 0, p.size / 2.2, 0, 6.28); g.fill(); }
+      else g.fillRect(-p.size / 3, -p.size / 3, p.size * 0.66, p.size * 0.66);
+      g.restore();
+    }
+    if (t < DURATION) confettiRaf = requestAnimationFrame(frame);
+    else g.clearRect(0, 0, W, H);
+  };
+  confettiRaf = requestAnimationFrame(frame);
+}
 
-  fly.x += fly.vx * dt;
-  fly.y += fly.vy * dt;
-  if (fly.x < 0) { fly.x = 0; fly.vx = Math.abs(fly.vx); }
-  else if (fly.x > maxX) { fly.x = maxX; fly.vx = -Math.abs(fly.vx); }
-  if (fly.y < 0) { fly.y = 0; fly.vy = Math.abs(fly.vy); }
-  else if (fly.y > maxY) { fly.y = maxY; fly.vy = -Math.abs(fly.vy); }
+// 좁은 화면(모바일)에서 아래로 스크롤하면 아래쪽 메뉴가 사라지고, 위로 올리면 부드럽게 다시 나타나요.
+function setupDockAutoHide() {
+  const dock = els.dock;
+  if (!dock) return;
+  const narrow = window.matchMedia("(max-width: 1040px)");
+  let lastY = window.scrollY;
+  let ticking = false;
 
-  els.earnBtn.style.transform = `translate(${fly.x.toFixed(1)}px, ${fly.y.toFixed(1)}px)`;
-  flyRaf = requestAnimationFrame(flyLoop);
+  const update = () => {
+    ticking = false;
+    const y = window.scrollY;
+    const dy = y - lastY;
+    if (!narrow.matches || y < 24) dock.classList.remove("dock-hidden"); // 맨 위이거나 넓은 화면이면 항상 보임
+    else if (dy > 8) dock.classList.add("dock-hidden");                   // 아래로 내리는 중 → 숨김
+    else if (dy < -8) dock.classList.remove("dock-hidden");               // 위로 올리는 중 → 나타남
+    if (Math.abs(dy) > 8) lastY = y;
+  };
+
+  window.addEventListener("scroll", () => {
+    if (!ticking) { ticking = true; requestAnimationFrame(update); }
+  }, { passive: true });
+  if (narrow.addEventListener) narrow.addEventListener("change", update);
 }
 
 /* =====================================================================
@@ -957,7 +925,7 @@ function renderMap() {
   const funding = phase === "funding" || phase === "boarding";
   const flying = phase === "flying" || phase === "rescue";
   const onIsland = phase === "crashing" || phase === "island" || phase === "escaping";
-  const hasCrash = !!(trip && trip.leg === leg && trip.crash > 0 && (phase !== "funding" && phase !== "boarding" && phase !== "flying"));
+  const hasCrash = !!(trip && trip.leg === leg && tripCrash() > 0 && (phase !== "funding" && phase !== "boarding" && phase !== "flying"));
   const frac = funding ? ctx.shared / ctx.goal : Math.abs(p - origin); // 출발지에서 목적지 방향으로 얼마나 왔는지
   const s = 1 / view.k;
 
@@ -991,8 +959,8 @@ function renderMap() {
   // 무인도 표시: 추락한 지점에 섬을 그려 둡니다.
   if (hasCrash) {
     const pc = leg % 2 === 0
-      ? 0 + (1 - 0) * ease(trip.crash)
-      : 1 + (0 - 1) * ease(trip.crash);
+      ? 0 + (1 - 0) * ease(tripCrash())
+      : 1 + (0 - 1) * ease(tripCrash());
     const ip = mapPointAt(pc);
     els.mapIsland.style.display = "";
     place(els.mapIsland, ip.x, ip.y, s * 0.9);
@@ -1012,7 +980,7 @@ function renderMap() {
       : "현재 위치: 무인도 (한국과 인도 사이 비행 경로 위)";
     els.mapProgress.textContent = phase === "crashing"
       ? "비행 진행도 " + (frac * 100).toFixed(0) + "%에서 추락"
-      : `무인도 탈출 모금 ${(ctx.shared / ctx.goal * 100).toFixed(1)}% (${won(ctx.shared)} / ${won(ctx.goal)}달러)`;
+      : `무인도 탈출 모금 ${(ctx.shared / ctx.goal * 100).toFixed(1)}% (${won(ctx.shared)} / ${won(ctx.goal)}조개껍질)`;
   } else {
     els.mapWhere.textContent = p < 0.5
       ? "현재 위치: 대한민국 충청남도 홍성군 내포신도시"
@@ -1036,7 +1004,7 @@ function openMap() {
    ===================================================================== */
 /* ---------- 공통 ---------- */
 
-const KINDS = ["krw", "inr", "usd"];
+const KINDS = ["krw", "inr", "shell"];
 // 받침 유무에 따라 조사를 붙이는 도우미 (원 → "원을", 루피 → "루피를")
 function hasBatchim(w) {
   const c = w.charCodeAt(w.length - 1);
@@ -1173,7 +1141,7 @@ function updateExPreview() {
 function renderExchange() {
   $("exWKrw").textContent = won(player.wallet.krw);
   $("exWInr").textContent = won(player.wallet.inr);
-  $("exWUsd").textContent = won(player.wallet.usd);
+  $("exWShell").textContent = won(player.wallet.shell);
   updateExPreview();
 }
 
@@ -1223,12 +1191,15 @@ function settleLoan(k, now) {
   if (l) { l.owed = loanOwed(k, now); l.accAt = now; }
 }
 
-// 대출 가능 금액: (신용 점수 × 1,000원 상당 − 지금 갚아야 할 돈 합계)
+// 은행마다 최대 대출: (신용 점수 × 2,000원 상당)과 1,000,000원 상당 중 작은 값을 그 은행의 돈으로 바꾼 값 (소수점은 버려요)
+//   한국은행 1,000,000원 · 인도은행 15,000,000루피 · 조개껍질 은행 10,000,000조개껍질
+function loanLimit(k) {
+  const krw = Math.min(player.credit * BANK.limitPerPoint, BANK.maxLoanKrw);
+  return Math.floor((krw * RATE.krw) / RATE[k]);
+}
+
 function loanAvailable(k, now) {
-  const limit = player.credit * BANK.limitPerPoint;
-  let owed = 0;
-  for (const b of KINDS) owed += toKrw(b, loanOwed(b, now));
-  return Math.max(Math.floor(((limit - owed) * RATE.krw) / RATE[k]), 0);
+  return Math.max(loanLimit(k) - Math.ceil(loanOwed(k, now)), 0);
 }
 
 // 만기가 지났는데 못 갚았으면 12시간마다 신용 점수가 내려갑니다.
@@ -1302,7 +1273,7 @@ function renderBank() {
   const now = serverNow();
   $("bankCredit").textContent = won(player.credit);
   $("bankCreditLabel").textContent = creditLabel(player.credit);
-  $("bankLimit").textContent = won(player.credit * BANK.limitPerPoint);
+  $("bankLimit").textContent = won(Math.min(player.credit * BANK.limitPerPoint, BANK.maxLoanKrw));
 
   for (const b of BANKS) {
     const card = document.querySelector(`[data-bank="${b.key}"]`);
@@ -1398,15 +1369,22 @@ function bankTick() {
 let rankCat = "credit";
 let rankUnsub = null;
 let rankEntries = [];
+let approvedName = null; // 관리자가 허락해 준 이름 (null 이면 아직 허락 전)
+let approvedUnsub = null;
 
-function myEntry() {
-  return {
-    name: player.name,
-    credit: Math.floor(player.credit),
-    clicks: Math.floor(player.clicks),
-    donated: Math.floor(player.donatedKrw),
-    updatedAt: Date.now(),
-  };
+const myStats = () => ({
+  credit: Math.floor(player.credit),
+  clicks: Math.floor(player.clicks),
+  donated: Math.floor(player.donatedKrw),
+});
+
+// 내 랭킹 상태를 한 줄로 설명합니다.
+function rankStatusText() {
+  if (!player.name) return "아직 랭킹을 신청하지 않았어요. 이름을 적어 신청하면 관리자가 허락한 뒤에 랭킹에 올라가요.";
+  if (!fb) return `내 이름: ${player.name} (연습 모드라 허락 없이 바로 보여요)`;
+  if (approvedName && approvedName === player.name) return `내 이름: ${player.name} · 허락됨 (기록이 자동으로 올라가요)`;
+  if (approvedName) return `허락된 이름: ${approvedName} · 새 이름 "${player.name}" 신청은 관리자 허락을 기다리는 중이에요.`;
+  return `신청한 이름: ${player.name} · 관리자 허락을 기다리는 중이에요. 허락되면 랭킹에 올라가요.`;
 }
 
 function renderRank() {
@@ -1420,7 +1398,7 @@ function renderRank() {
   if (!rankEntries.length) {
     const li = document.createElement("li");
     li.className = "rank-empty";
-    li.textContent = "아직 등록한 사람이 없어요. 첫 번째로 이름을 올려 보세요!";
+    li.textContent = "아직 랭킹에 오른 사람이 없어요. 신청하면 관리자가 허락한 뒤에 올라가요.";
     list.appendChild(li);
   }
   rankEntries.forEach((e, i) => {
@@ -1438,12 +1416,10 @@ function renderRank() {
     li.append(no, name, val);
     list.appendChild(li);
   });
-  $("rankMine").textContent = player.name
-    ? `내 이름: ${player.name} (기록이 자동으로 올라가요)`
-    : "아직 랭킹에 등록하지 않았어요.";
+  $("rankMine").textContent = rankStatusText();
   $("rankName").value = $("rankName").value || player.name;
   $("rankRemove").hidden = !player.name;
-  $("rankSave").textContent = player.name ? "이름 바꾸기" : "랭킹에 등록";
+  $("rankSave").textContent = player.name ? "새 이름으로 다시 신청" : "랭킹 신청";
 }
 
 function unsubscribeRank() {
@@ -1454,13 +1430,13 @@ function unsubscribeRank() {
 function subscribeRank() {
   unsubscribeRank();
   if (!fb) { // 연습 모드: 내 기록만 보여 줍니다.
-    const mine = myEntry();
+    const mine = myStats();
     rankEntries = player.name ? [{ id: publicId, name: player.name, value: mine[rankCat] }] : [];
     renderRank();
     return;
   }
   const { dbMod, db } = fb;
-  const q = dbMod.query(dbMod.ref(db, "v2/ranking"), dbMod.orderByChild(rankCat), dbMod.limitToLast(RANK_LIMIT));
+  const q = dbMod.query(dbMod.ref(db, "v3/ranking"), dbMod.orderByChild(rankCat), dbMod.limitToLast(RANK_LIMIT));
   rankUnsub = dbMod.onValue(
     q,
     (snap) => {
@@ -1481,6 +1457,25 @@ function subscribeRank() {
   );
 }
 
+// 내 랭킹 허락 여부를 실시간으로 지켜봅니다. (관리자가 Firebase에서 허락하면 바로 반영돼요)
+function watchApproval() {
+  if (typeof approvedUnsub === "function") approvedUnsub();
+  approvedUnsub = null;
+  approvedName = null;
+  if (!fb || !publicId) return;
+  const { dbMod, db } = fb;
+  approvedUnsub = dbMod.onValue(
+    dbMod.ref(db, "v3/rankApproved/" + publicId),
+    (snap) => {
+      const v = snap.val();
+      approvedName = typeof v === "string" && v ? v : null;
+      if (approvedName) playerDirty = true; // 허락됐으니 내 기록을 랭킹에 올리도록 표시
+      renderRank();
+    },
+    (err) => console.error("랭킹 허락 확인 실패:", err)
+  );
+}
+
 async function saveRankName(e) {
   e.preventDefault();
   const msg = $("rankMsg");
@@ -1488,10 +1483,22 @@ async function saveRankName(e) {
   if (name.length < 1) { msg.textContent = "이름을 1~12글자로 적어 주세요."; return; }
   player.name = name;
   savePlayer();
-  await syncNow(true);
-  if (!fb) subscribeRank();
+  if (fb) {
+    try {
+      if (!publicId) publicId = (await sha256Hex(accountCode)).slice(0, 24);
+      await fb.dbMod.set(fb.dbMod.ref(fb.db, "v3/rankRequests/" + publicId), {
+        name, ...myStats(), at: fb.dbMod.serverTimestamp(),
+      });
+      msg.textContent = `"${name}" 이름으로 랭킹을 신청했어요. 관리자가 허락하면 랭킹에 올라가요.`;
+    } catch (err) {
+      console.error("랭킹 신청 실패:", err);
+      msg.textContent = "신청하지 못했어요. 잠시 후 다시 시도해 주세요. [" + (err && err.message ? err.message : err) + "]";
+    }
+  } else {
+    subscribeRank();
+    msg.textContent = `"${name}" 이름으로 등록했어요. (연습 모드)`;
+  }
   renderRank();
-  msg.textContent = `"${name}" 이름으로 등록했어요. 신용 점수, 클릭 수, 기부액이 자동으로 올라가요.`;
 }
 
 async function removeRank() {
@@ -1499,12 +1506,14 @@ async function removeRank() {
   player.name = "";
   savePlayer();
   if (fb && publicId) {
-    try { await fb.dbMod.remove(fb.dbMod.ref(fb.db, "v2/ranking/" + publicId)); } catch (e) { console.error(e); }
+    const { dbMod, db } = fb;
+    try { await dbMod.remove(dbMod.ref(db, "v3/rankRequests/" + publicId)); } catch (e) { console.error(e); }
+    try { await dbMod.remove(dbMod.ref(db, "v3/ranking/" + publicId)); } catch (e) { console.error(e); }
   }
   if (!fb) subscribeRank();
   $("rankName").value = "";
   renderRank();
-  msg.textContent = "랭킹에서 이름을 뺐어요.";
+  msg.textContent = "랭킹 신청을 취소하고 이름을 뺐어요.";
 }
 
 /* =====================================================================
@@ -1540,7 +1549,7 @@ async function loadAccountByCode() {
   msg.textContent = "불러오는 중…";
   try {
     await syncNow(true); // 지금 계정의 변경 사항은 먼저 저장
-    const snap = await fb.dbMod.get(fb.dbMod.ref(fb.db, "v2/players/" + code));
+    const snap = await fb.dbMod.get(fb.dbMod.ref(fb.db, "v3/players/" + code));
     if (!snap.exists()) { msg.textContent = "그 코드로 저장된 데이터를 찾지 못했어요."; return; }
     if (!window.confirm("이 기기의 데이터가 입력한 코드의 데이터로 바뀌어요. (지금 계정의 데이터는 서버에 그대로 남아 있어요.) 계속할까요?")) {
       msg.textContent = "취소했어요.";
@@ -1552,7 +1561,8 @@ async function loadAccountByCode() {
     player = normalizePlayer(snap.val());
     try { localStorage.setItem(PLAYER_KEY, JSON.stringify(player)); } catch (e) { /* 무시 */ }
     playerDirty = false;
-    applyMoneyReset();
+    applyResets();
+    watchApproval();
     $("accInput").value = "";
     renderAccount();
     render();
@@ -1569,9 +1579,13 @@ async function loadAccountByCode() {
    서버 연결 후 할 일: 접속자 수, 내 데이터 맞추기, 저장
    ===================================================================== */
 
-// 모두의 돈 초기화: 서버의 v2/moneyReset 숫자가 내가 마지막으로 반영한 번호보다 커지면
-// 지갑(원·루피·달러), 은행 통장, 대출을 0으로 만듭니다. (아이템·신용 점수·클릭 수·기부 기록·랭킹 이름은 그대로)
+// 관리자가 Firebase 에서 숫자를 올리면 모두에게 적용되는 초기화 신호 (v3/reset/money, v3/reset/pass)
+//  - money: 지갑(원·루피·조개껍질), 은행 통장, 대출을 0으로
+//  - pass : 상점 게임패스(영구 ×10, 부스트)를 없앰
+// 아이템 외의 신용 점수·클릭 수·기부 기록·랭킹 이름은 그대로예요.
 let moneyResetVersion = 0;
+let passResetVersion = 0;
+
 function applyMoneyReset() {
   if (player.moneyResetSeen >= moneyResetVersion) return false;
   const hadMoney = KINDS.some((k) => player.wallet[k] > 0 || player.bank[k] > 0 || player.loan[k]);
@@ -1591,6 +1605,23 @@ function applyMoneyReset() {
   if (hadMoney) els.status.textContent = "모든 사람의 돈이 0원으로 초기화됐어요. (지갑·통장·대출)";
   return true;
 }
+
+function applyPassReset() {
+  if (player.passResetSeen >= passResetVersion) return false;
+  const had = player.perm10 || player.boostUntil > 0;
+  player.perm10 = false;
+  player.boostUntil = 0;
+  player.passResetSeen = passResetVersion;
+  savePlayer();
+  render();
+  renderFever();
+  renderPerks();
+  if ($("shopDialog").open) renderShop();
+  if (had) els.status.textContent = "상점 게임패스(영구 ×10·부스트)가 초기화됐어요.";
+  return true;
+}
+
+const applyResets = () => { const a = applyMoneyReset(); const b = applyPassReset(); return a || b; };
 
 let accountReady = false;
 let syncing = false;
@@ -1615,17 +1646,24 @@ async function syncNow(force) {
   if (!playerDirty && !force) return;
   syncing = true;
   playerDirty = false;
+  const { dbMod, db } = fb;
   try {
-    const { dbMod, db } = fb;
-    await dbMod.set(dbMod.ref(db, "v2/players/" + accountCode), JSON.parse(JSON.stringify(player)));
-    if (player.name && publicId) {
-      await dbMod.set(dbMod.ref(db, "v2/ranking/" + publicId), myEntry());
-    }
+    await dbMod.set(dbMod.ref(db, "v3/players/" + accountCode), JSON.parse(JSON.stringify(player)));
     playerSyncState = "서버에 저장됨";
   } catch (e) {
     console.error("내 데이터 저장 실패:", e);
     playerDirty = true;
     playerSyncState = "서버 저장 실패 [" + (e && e.message ? e.message : e) + "]";
+  }
+  // 관리자가 허락한 이름이 있으면 내 기록을 랭킹에 올립니다. (이름은 허락된 이름이어야 서버가 받아 줘요)
+  if (player.name && approvedName && publicId) {
+    try {
+      await dbMod.set(dbMod.ref(db, "v3/ranking/" + publicId), {
+        name: approvedName, ...myStats(), updatedAt: dbMod.serverTimestamp(),
+      });
+    } catch (e) {
+      console.error("랭킹 기록 올리기 실패:", e);
+    }
   }
   syncing = false;
   renderBuildInfo();
@@ -1636,15 +1674,15 @@ async function connectExtras() {
 
   // 실시간 접속자 수: 접속하면 내 이름표를 올리고, 나가면 서버가 알아서 지웁니다.
   const cid = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const presRef = dbMod.ref(db, "v2/presence/" + cid);
+  const presRef = dbMod.ref(db, "v3/presence/" + cid);
   dbMod.onValue(dbMod.ref(db, ".info/connected"), (snap) => {
     if (snap.val() === true) {
       dbMod.onDisconnect(presRef).remove();
-      dbMod.set(presRef, Date.now()).catch((e) => console.error("접속 표시 실패:", e));
+      dbMod.set(presRef, dbMod.serverTimestamp()).catch((e) => console.error("접속 표시 실패:", e));
     }
   });
   dbMod.onValue(
-    dbMod.ref(db, "v2/presence"),
+    dbMod.ref(db, "v3/presence"),
     (snap) => {
       const n = typeof snap.size === "number" ? snap.size : snap.numChildren();
       els.onlineCount.textContent = String(Math.max(n, 1));
@@ -1652,16 +1690,25 @@ async function connectExtras() {
     (err) => console.error("접속자 수 읽기 실패:", err)
   );
 
-  // 돈 초기화 신호 (접속 중이면 바로, 나중에 접속해도 접속할 때 반영)
+  // 초기화 신호 (접속 중이면 바로, 나중에 접속해도 접속할 때 반영)
   dbMod.onValue(
-    dbMod.ref(db, "v2/moneyReset"),
-    (snap) => { moneyResetVersion = nonNeg(snap.val()); applyMoneyReset(); },
+    dbMod.ref(db, "v3/reset/money"),
+    (snap) => { moneyResetVersion = nonNeg(snap.val()); applyResets(); },
     (err) => console.error("돈 초기화 신호 읽기 실패:", err)
   );
+  dbMod.onValue(
+    dbMod.ref(db, "v3/reset/pass"),
+    (snap) => { passResetVersion = nonNeg(snap.val()); applyResets(); },
+    (err) => console.error("게임패스 초기화 신호 읽기 실패:", err)
+  );
+
+  // 랭킹 허락 여부 지켜보기
+  if (!publicId) publicId = (await sha256Hex(accountCode)).slice(0, 24);
+  watchApproval();
 
   // 이 계정의 서버 데이터와 맞추기
   try {
-    const snap = await dbMod.get(dbMod.ref(db, "v2/players/" + accountCode));
+    const snap = await dbMod.get(dbMod.ref(db, "v3/players/" + accountCode));
     const remote = snap.exists() ? normalizePlayer(snap.val()) : null;
     if (remote && remote.updatedAt > player.updatedAt) {
       player = remote; // 서버가 더 최신이면 서버 데이터를 씀 (다른 기기·앱에서 이어하기)
@@ -1671,7 +1718,7 @@ async function connectExtras() {
     } else {
       playerDirty = true; // 서버에 없거나 이 기기 쪽이 더 최신
     }
-    applyMoneyReset(); // 서버 데이터로 바뀌었을 수 있으니 한 번 더 확인
+    applyResets(); // 서버 데이터로 바뀌었을 수 있으니 한 번 더 확인
     accountReady = true;
     playerSyncState = "서버에 저장됨";
   } catch (e) {
@@ -1750,28 +1797,19 @@ function wireUi() {
    저장소(백엔드)
    ===================================================================== */
 
-// 비행을 시작할 때 추락할지 정합니다. (0이면 추락 없음, 아니면 비행의 몇 % 지점에서 추락할지)
-function rollCrash() {
-  if (Math.random() >= CRASH.chance) return 0;
-  return Math.round((CRASH.minFrac + Math.random() * (CRASH.maxFrac - CRASH.minFrac)) * 1000) / 1000;
-}
-
 const parseTrip = (v) =>
   v && Number.isFinite(Number(v.startAt))
-    ? {
-        leg: nonNeg(v.leg),
-        startAt: Number(v.startAt),
-        crash: Math.min(Math.max(Number(v.crash) || 0, 0), 1),
-        escapedAt: Number(v.escapedAt) || 0,
-      }
+    ? { leg: nonNeg(v.leg), startAt: Number(v.startAt), escapedAt: Number(v.escapedAt) || 0 }
     : null;
 
 function setupLocalBackend(message) {
   try {
     const s = JSON.parse(localStorage.getItem(LOCAL_KEY));
     if (s) {
-      donated = { krw: nonNeg(s.krw), inr: nonNeg(s.inr), usd: s.usd && typeof s.usd === "object" ? s.usd : {} };
+      donated = { krw: nonNeg(s.krw), inr: nonNeg(s.inr) };
+      island = s.island && typeof s.island === "object" ? { leg: Number(s.island.leg), amt: nonNeg(s.island.amt) } : { leg: -1, amt: 0 };
       leg = nonNeg(s.leg);
+      legAt = nonNeg(s.legAt);
       trip = parseTrip(s.trip);
     }
   } catch (e) { /* 무시 */ }
@@ -1782,19 +1820,19 @@ function setupLocalBackend(message) {
 
   const saveLocal = () => {
     try {
-      localStorage.setItem(LOCAL_KEY, JSON.stringify({ krw: donated.krw, inr: donated.inr, usd: donated.usd, leg, trip }));
+      localStorage.setItem(LOCAL_KEY, JSON.stringify({ krw: donated.krw, inr: donated.inr, island, leg, legAt, trip }));
     } catch (e) { /* 무시 */ }
   };
 
+  // 연습 모드(이 기기에서만): 서버 규칙 대신 같은 판단을 이 코드가 직접 합니다.
   backend = {
     async add(kind, l, amount) {
-      if (kind === "usd") {
-        const key = "L" + l;
-        const cur = nonNeg(donated.usd[key]);
-        const next = Math.max(cur, Math.min(cur + amount, ISLAND_GOAL));
-        donated.usd[key] = next;
+      if (kind === "shell") {
+        const base = island.leg === l ? nonNeg(island.amt) : 0;
+        const next = Math.max(base, Math.min(base + amount, ISLAND_GOAL));
+        island = { leg: l, amt: next };
         saveLocal();
-        return next - cur;
+        return next - base;
       }
       const cap = baseOfLeg(l) + goalOfLeg(l);
       const cur = donated[kind];
@@ -1805,12 +1843,12 @@ function setupLocalBackend(message) {
     },
     async startTrip(l) {
       if (!(trip && trip.leg === l)) {
-        trip = { leg: l, startAt: Date.now(), crash: rollCrash(), escapedAt: 0 };
+        trip = { leg: l, startAt: Date.now(), escapedAt: 0 };
         saveLocal();
       }
     },
     async escape(l) {
-      if (trip && trip.leg === l && trip.crash > 0 && !trip.escapedAt) {
+      if (trip && trip.leg === l && isCrashStart(trip.startAt) && !trip.escapedAt) {
         trip = { ...trip, escapedAt: Date.now() };
         saveLocal();
       }
@@ -1818,6 +1856,7 @@ function setupLocalBackend(message) {
     async nextLeg(l) {
       if (leg === l) {
         leg = l + 1;
+        legAt = Date.now();
         saveLocal();
         render();
         renderFever();
@@ -1849,12 +1888,13 @@ async function initBackend() {
 
     const app = appMod.initializeApp(firebaseConfig);
     const db = dbMod.getDatabase(app);
-    const krwRef = dbMod.ref(db, "v2/donatedKrw");
-    const inrRef = dbMod.ref(db, "v2/donatedInr");
-    const usdRef = dbMod.ref(db, "v2/usd");
-    const legRef = dbMod.ref(db, "v2/leg");
-    const tripRef = dbMod.ref(db, "v2/trip");
-    const feverRef = dbMod.ref(db, "v2/fever");
+    const krwRef = dbMod.ref(db, "v3/donatedKrw");
+    const inrRef = dbMod.ref(db, "v3/donatedInr");
+    const islandRef = dbMod.ref(db, "v3/island");
+    const legRef = dbMod.ref(db, "v3/leg");
+    const legAtRef = dbMod.ref(db, "v3/legAt");
+    const tripRef = dbMod.ref(db, "v3/trip");
+    const feverRef = dbMod.ref(db, "v3/fever");
     const failMsg = "공유 서버에 연결하지 못했어요. Firebase 설정과 규칙을 확인해 주세요.";
     // 실제 오류 내용도 함께 보여 줘서 원인을 찾기 쉽게 합니다. (permission_denied 이면 규칙 문제)
     const fail = (err) => {
@@ -1878,8 +1918,9 @@ async function initBackend() {
       render();
     }, fail);
 
-    dbMod.onValue(usdRef, (snap) => {
-      donated.usd = snap.val() || {};
+    dbMod.onValue(islandRef, (snap) => {
+      const v = snap.val();
+      island = v ? { leg: nonNeg(v.leg), amt: nonNeg(v.amt) } : { leg: -1, amt: 0 };
       render();
     }, fail);
 
@@ -1887,6 +1928,10 @@ async function initBackend() {
       leg = nonNeg(snap.val());
       render();
       renderFever();
+    }, fail);
+
+    dbMod.onValue(legAtRef, (snap) => {
+      legAt = nonNeg(snap.val());
     }, fail);
 
     dbMod.onValue(tripRef, (snap) => {
@@ -1904,16 +1949,17 @@ async function initBackend() {
       renderFever();
     });
 
+    // 서버 규칙(firebase-rules.json)이 모든 쓰기를 다시 확인해요. 조건이 안 맞으면 서버가 거부합니다.
     backend = {
       // 목표까지만 안전하게 더하고, 실제로 더해진 금액을 돌려줍니다.
       async add(kind, l, amount) {
         let added = 0;
-        if (kind === "usd") {
-          await dbMod.runTransaction(dbMod.ref(db, "v2/usd/L" + l), (current) => {
-            const cur = nonNeg(current);
-            const next = Math.max(cur, Math.min(cur + amount, ISLAND_GOAL));
-            added = next - cur;
-            return next;
+        if (kind === "shell") {
+          await dbMod.runTransaction(islandRef, (cur) => {
+            const base = cur && Number(cur.leg) === l ? nonNeg(cur.amt) : 0;
+            const next = Math.max(base, Math.min(base + amount, ISLAND_GOAL));
+            added = next - base;
+            return { leg: l, amt: next };
           });
           return added;
         }
@@ -1926,31 +1972,19 @@ async function initBackend() {
         });
         return added;
       },
-      // 이번 구간의 비행을 시작합니다. 이미 시작됐다면 그대로 둡니다. (추락 여부도 이때 정해집니다.)
+      // 이번 구간의 비행을 시작합니다. 시작 시각은 서버가 정해요. (그래서 추락 여부도 서버 시각으로 정해져요)
       async startTrip(l) {
-        await dbMod.runTransaction(tripRef, (cur) =>
-          cur && Number(cur.leg) === l
-            ? cur
-            : { leg: l, startAt: serverNow(), crash: rollCrash(), escapedAt: 0 }
-        );
+        await dbMod.set(tripRef, { leg: l, startAt: dbMod.serverTimestamp() });
       },
       // 무인도 탈출 비용이 모이면 구조 비행을 시작합니다.
       async escape(l) {
-        await dbMod.runTransaction(tripRef, (cur) => {
-          if (cur && Number(cur.leg) === l && Number(cur.crash) > 0 && !Number(cur.escapedAt)) {
-            return { leg: l, startAt: Number(cur.startAt), crash: Number(cur.crash), escapedAt: serverNow() };
-          }
-          return cur;
-        });
+        await dbMod.set(dbMod.ref(db, "v3/trip/escapedAt"), dbMod.serverTimestamp());
       },
-      // 비행이 끝나면 다음 구간으로 넘어갑니다. (한국 → 인도 → 한국 → …)
+      // 비행이 끝나면 다음 구간으로 넘어갑니다. (한국 → 인도 → 한국 → …) 구간 시작 시각도 함께 기록해요.
       async nextLeg(l) {
-        await dbMod.runTransaction(legRef, (cur) => {
-          const c = nonNeg(cur);
-          return c === l ? l + 1 : c;
-        });
+        await dbMod.update(dbMod.ref(db), { "v3/leg": l + 1, "v3/legAt": dbMod.serverTimestamp() });
       },
-      // 피버타임 게이지에 클릭 n번을 더합니다.
+      // 피버타임 게이지에 클릭 n번을 더합니다. (n 이 0이면 "시작해도 되는지"만 확인)
       async addClicks(n) {
         await dbMod.runTransaction(feverRef, (cur) => applyClicks(cur, n, serverNow()));
       },
@@ -1966,28 +2000,30 @@ async function initBackend() {
    버튼
    ===================================================================== */
 function earn(e) {
-  if (guardOpen) return;
+  if (kicked) return;
 
   const check = checkClick(e);
-  if (check.bad) { // 사람이 낼 수 없는 클릭: 이 클릭은 인정하지 않고 경고를 띄웁니다.
-    openGuard(check.cps);
+  if (check.bad) { // 사람이 낼 수 없는 클릭: 빨간 화면이 덮이고 사이트에서 나가져요.
+    kickOut(check.cps);
     return;
   }
 
   const ctx = ctxOf(journeyState());
   const feverOn = isFever();
-  addWalletKind(ctx.kind, clickValue(ctx, feverOn)); // (피버타임) × (영구 ×10) × (부스트 ×5)
+  addWalletKind(ctx.kind, clickValue(ctx, feverOn)); // (피버타임) × (영구 ×10) × (부스트 ×3)
   player.clicks += 1;
   if (!feverOn) {
     els.status.textContent = "";
-    pending = Math.min(pending + 1, FEVER_CLICKS);
-    if (fever.count + pending >= FEVER_CLICKS) {
-      // 게이지가 찰 차례라면 기다리지 않고 바로 서버에 알립니다.
-      clearTimeout(flushTimer);
-      flushTimer = null;
-      flush();
-    } else {
-      scheduleFlush();
+    if (fever.count < FEVER_CLICKS) { // 게이지가 이미 가득이면 서버로 보낼 필요가 없어요
+      pending = Math.min(pending + 1, FEVER_CLICKS);
+      if (fever.count + pending >= FEVER_CLICKS) {
+        // 게이지가 찰 차례라면 기다리지 않고 바로 서버에 알립니다.
+        clearTimeout(flushTimer);
+        flushTimer = null;
+        flush();
+      } else {
+        scheduleFlush();
+      }
     }
   }
   savePlayer();
@@ -2018,8 +2054,9 @@ async function donate() {
     els.status.textContent =
       added > 0
         ? `${won(added)}${UNIT_OBJ[kind]} 안이령에게 기부했어요. 고마워요!`
-        : "이번 모금은 이미 목표 금액이 모두 모였어요.";
+        : "지금은 더 기부할 수 없어요. (이번 모금이 가득 찼거나, 서버가 허용하는 속도보다 빠른 기부예요)";
   } catch (e) {
+    console.error("기부 실패:", e);
     els.status.textContent = "기부하지 못했어요. 지갑의 돈은 그대로예요. 잠시 후 다시 시도해 주세요.";
   } finally {
     busy = false;
@@ -2029,7 +2066,6 @@ async function donate() {
 
 els.earnBtn.addEventListener("click", earn);
 els.donateBtn.addEventListener("click", donate);
-els.guardBtn.addEventListener("click", onGuardConfirm);
 els.mapBtn.addEventListener("click", openMap);
 els.mapClose.addEventListener("click", () => els.mapDialog.close());
 els.mapDialog.addEventListener("click", (e) => {
@@ -2039,6 +2075,12 @@ els.mapDialog.addEventListener("click", (e) => {
 // 사진 2를 미리 내려받아 두어 바뀔 때 깜빡이지 않게 합니다.
 new Image().src = PHOTO2;
 
+// 예전 버전이 남긴 저장값은 지웁니다. (새 버전은 모두 처음부터 시작해요)
+for (const k of OLD_KEYS) { try { localStorage.removeItem(k); } catch (e) { /* 무시 */ } }
+
+// 자동 클릭으로 나갔던 기기라면 바로 빨간 화면 (GUARD.banMs 를 켰을 때만)
+checkBan();
+
 // 계정과 내 데이터 준비 (이 기기에 저장된 코드가 없으면 새로 만듭니다)
 accountCode = loadAccountCode();
 try { localStorage.setItem(ACCOUNT_KEY, accountCode); } catch (e) { /* 무시 */ }
@@ -2046,17 +2088,13 @@ player = loadPlayerLocal();
 sha256Hex(accountCode).then((h) => { publicId = h.slice(0, 24); });
 
 wireUi();
-loadGuard();
+setupDockAutoHide();
 render();
 renderFever();
 renderJourney();
-renderGuardInfo();
 renderBuildInfo();
-if (guard.flyUntil > Date.now()) startFlying(); // 새로고침해도 벌칙은 이어집니다.
 requestAnimationFrame(journeyLoop);
 setInterval(renderFever, 100);
-setInterval(renderGuard, 50);
-setInterval(renderGuardInfo, 500);
 setInterval(renderPerks, 500);
 setInterval(bankTick, 1000);
 initBackend();
