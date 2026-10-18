@@ -1,84 +1,199 @@
 {
   "rules": {
     ".read": false,
-    "v2": {
+    "v3": {
       "donatedKrw": {
-        ".read": false,
-        ".write": false,
-        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 387000000000 && (!data.exists() || newData.val() >= data.val())"
+        ".read": true,
+        ".write": "newData.exists()",
+        ".validate": "newData.isNumber() && newData.val() >= 0 && (!data.exists() || newData.val() >= data.val()) && ((!root.child('v3/leg').exists() && newData.val() <= 387000) || (root.child('v3/leg').exists() && newData.val() <= ((root.child('v3/leg').val() - root.child('v3/leg').val() % 2) / 2 + 1) * 387000))"
       },
       "donatedInr": {
-        ".read": false,
-        ".write": false,
-        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 52400000000 && (!data.exists() || newData.val() >= data.val())"
-      },
-      "usd": {
-        ".read": false,
-        "$leg": {
-          ".write": false,
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && (!data.exists() || newData.val() >= data.val())"
-        }
+        ".read": true,
+        ".write": "newData.exists()",
+        ".validate": "newData.isNumber() && newData.val() >= 0 && (!data.exists() || newData.val() >= data.val()) && ((!root.child('v3/leg').exists() && newData.val() <= 0) || (root.child('v3/leg').exists() && newData.val() <= ((root.child('v3/leg').val() + root.child('v3/leg').val() % 2) / 2) * 52400))"
       },
       "leg": {
-        ".read": false,
-        ".write": false,
-        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && (!data.exists() || newData.val() >= data.val())"
+        ".read": true,
+        ".write": "newData.exists()",
+        ".validate": "newData.isNumber() && newData.parent().child('legAt').val() === now && ((!data.exists() && newData.val() === 1 && (root.child('v3/trip/leg').val() === 0 && ((root.child('v3/trip/startAt').val() % 1000 >= 30 && now >= root.child('v3/trip/startAt').val() + 11000) || (root.child('v3/trip/startAt').val() % 1000 < 30 && root.child('v3/trip/escapedAt').exists() && now >= root.child('v3/trip/escapedAt').val() + 8000)))) || (data.exists() && newData.val() === data.val() + 1 && (root.child('v3/trip/leg').val() === data.val() && ((root.child('v3/trip/startAt').val() % 1000 >= 30 && now >= root.child('v3/trip/startAt').val() + 11000) || (root.child('v3/trip/startAt').val() % 1000 < 30 && root.child('v3/trip/escapedAt').exists() && now >= root.child('v3/trip/escapedAt').val() + 8000)))))"
+      },
+      "legAt": {
+        ".read": true,
+        ".write": "newData.exists()",
+        ".validate": "newData.isNumber() && newData.val() === now && ((root.child('v3/leg').exists() && newData.parent().child('leg').val() === root.child('v3/leg').val() + 1) || (!root.child('v3/leg').exists() && newData.parent().child('leg').val() === 1))"
       },
       "trip": {
-        ".read": false,
-        ".write": false,
+        ".read": true,
+        ".write": "newData.exists() && newData.child('leg').exists() && newData.child('startAt').exists() && (!data.exists() || newData.child('leg').val() > data.child('leg').val() || (newData.child('leg').val() === data.child('leg').val() && newData.child('startAt').val() === data.child('startAt').val() && (!data.child('escapedAt').exists() || newData.child('escapedAt').val() === data.child('escapedAt').val())))",
         ".validate": "newData.hasChildren(['leg', 'startAt'])",
         "leg": {
-          ".validate": "newData.isNumber() && newData.val() >= 0"
+          ".validate": "newData.isNumber() && ((root.child('v3/leg').exists() && newData.val() === root.child('v3/leg').val()) || (!root.child('v3/leg').exists() && newData.val() === 0)) && (!data.exists() || newData.val() > data.val()) && ((newData.val() % 2 === 0 && root.child('v3/donatedKrw').val() >= (newData.val() / 2 + 1) * 387000) || (newData.val() % 2 === 1 && root.child('v3/donatedInr').val() >= ((newData.val() + 1) / 2) * 52400)) && (!root.child('v3/legAt').exists() || now >= root.child('v3/legAt').val() + 178500)"
         },
         "startAt": {
-          ".validate": "newData.isNumber() && newData.val() >= 0"
-        },
-        "crash": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1"
+          ".validate": "newData.isNumber() && newData.val() === now"
         },
         "escapedAt": {
-          ".validate": "newData.isNumber() && newData.val() >= 0"
+          ".validate": "newData.isNumber() && newData.val() === now && !data.exists() && root.child('v3/trip/startAt').val() % 1000 < 30 && root.child('v3/island/leg').val() === root.child('v3/trip/leg').val() && root.child('v3/island/amt').val() >= 1000000"
+        },
+        "$other": {
+          ".validate": false
+        }
+      },
+      "island": {
+        ".read": true,
+        ".write": "newData.exists() && newData.child('leg').exists() && newData.child('amt').exists()",
+        ".validate": "newData.hasChildren(['leg', 'amt'])",
+        "leg": {
+          ".validate": "newData.isNumber() && newData.val() === root.child('v3/trip/leg').val() && root.child('v3/trip/startAt').val() % 1000 < 30 && !root.child('v3/trip/escapedAt').exists() && (!data.exists() || newData.val() >= data.val())"
+        },
+        "amt": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000000 && (!data.exists() || newData.parent().child('leg').val() > root.child('v3/island/leg').val() || newData.val() >= data.val())"
         },
         "$other": {
           ".validate": false
         }
       },
       "fever": {
-        ".read": false,
-        ".write": false,
-        ".validate": "newData.hasChildren(['count', 'endAt'])",
-        "count": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 300"
-        },
-        "endAt": {
+        ".read": true,
+        ".write": "newData.exists()",
+        ".validate": "newData.hasChildren(['count', 'endAt']) && newData.child('count').isNumber() && newData.child('endAt').isNumber() && newData.child('count').val() >= 0 && newData.child('count').val() <= 300 && newData.child('endAt').val() <= now + 6000 && ((!data.exists() && newData.child('endAt').val() === 0 && newData.child('count').val() <= 40) || (data.exists() && newData.child('endAt').val() === data.child('endAt').val() && newData.child('count').val() >= data.child('count').val() && newData.child('count').val() <= data.child('count').val() + 40 && (data.child('endAt').val() <= now || newData.child('count').val() === data.child('count').val())) || (data.exists() && data.child('count').val() === 300 && newData.child('count').val() === 0 && newData.child('endAt').val() >= now + 4000 && newData.child('endAt').val() <= now + 6000 && now + 1000 >= data.child('endAt').val() + 30000))"
+      },
+      "reset": {
+        ".read": true,
+        "money": {
           ".validate": "newData.isNumber() && newData.val() >= 0"
         },
-        "$other": {
-          ".validate": false
+        "pass": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
         }
-      },
-      "moneyReset": {
-        ".read": false,
-        ".validate": "newData.isNumber() && newData.val() >= 0"
       },
       "presence": {
-        ".read": false,
+        ".read": true,
         "$cid": {
-          ".write": false,
-          ".validate": "newData.isNumber()"
+          ".write": true,
+          ".validate": "$cid.length <= 30 && newData.isNumber()"
         }
       },
-      "ranking": {
-        ".read": false,
-        ".indexOn": [
-          "credit",
-          "clicks",
-          "donated"
-        ],
+      "players": {
+        "$id": {
+          ".read": true,
+          ".write": true,
+          ".validate": "$id.length === 20 && newData.hasChildren(['updatedAt', 'wallet'])",
+          "v": {
+            ".validate": "newData.isNumber()"
+          },
+          "name": {
+            ".validate": "newData.isString() && newData.val().length <= 12"
+          },
+          "wallet": {
+            "krw": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "inr": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "shell": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "mine": {
+            "krw": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "inr": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "shell": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "bank": {
+            "krw": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "inr": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "shell": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "bankAt": {
+            "krw": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "inr": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "shell": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "clicks": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "donatedKrw": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "boostUntil": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "perm10": {
+            ".validate": "newData.isBoolean()"
+          },
+          "credit": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000"
+          },
+          "moneyResetSeen": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "passResetSeen": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "updatedAt": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "loan": {
+            "$k": {
+              ".validate": "($k === 'krw' || $k === 'inr' || $k === 'shell') && newData.hasChildren(['owed', 'dueAt', 'accAt', 'lateApplied'])",
+              "owed": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "dueAt": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "accAt": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "lateApplied": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      "rankRequests": {
         "$pid": {
-          ".write": false,
-          ".validate": "newData.hasChildren(['name', 'credit', 'clicks', 'donated', 'updatedAt'])",
+          ".write": true,
+          ".validate": "$pid.length <= 64 && newData.hasChildren(['name', 'credit', 'clicks', 'donated', 'at'])",
           "name": {
             ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
           },
@@ -91,19 +206,47 @@
           "donated": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
-          "updatedAt": {
-            ".validate": "newData.isNumber()"
+          "at": {
+            ".validate": "newData.isNumber() && newData.val() === now"
           },
           "$other": {
             ".validate": false
           }
         }
       },
-      "players": {
-        "$id": {
-          ".read": false,
-          ".write": false,
-          ".validate": "$id.length >= 16 && newData.hasChildren(['updatedAt'])"
+      "rankApproved": {
+        "$pid": {
+          ".read": true
+        }
+      },
+      "ranking": {
+        ".read": true,
+        ".indexOn": [
+          "credit",
+          "clicks",
+          "donated"
+        ],
+        "$pid": {
+          ".write": "root.child('v3/rankApproved').child($pid).exists()",
+          ".validate": "newData.hasChildren(['name', 'credit', 'clicks', 'donated', 'updatedAt']) && newData.child('name').val() === root.child('v3/rankApproved').child($pid).val()",
+          "name": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+          },
+          "credit": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1000"
+          },
+          "clicks": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && (!data.exists() || (newData.val() >= data.val() && newData.val() <= data.val() + ((now - data.parent().child('updatedAt').val()) / 1000 + 10) * 20))"
+          },
+          "donated": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && (!data.exists() || newData.val() >= data.val())"
+          },
+          "updatedAt": {
+            ".validate": "newData.isNumber() && newData.val() === now"
+          },
+          "$other": {
+            ".validate": false
+          }
         }
       },
       "$other": {
