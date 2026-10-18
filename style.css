@@ -437,97 +437,6 @@ button:focus-visible {
 /* 인도에 있을 때는 초록 포인트 */
 .in-india .ticket-head { border-bottom-color: #1a8f3c; }
 
-/* ---------- 자동 클릭 경고 ---------- */
-.guard-info {
-  min-height: 1.4em;
-  margin: 12px 28px 0;
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: #c0392b;
-}
-
-.guard {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(27, 37, 89, 0.78);
-}
-
-.guard[hidden] { display: none; }
-
-.guard-card {
-  position: absolute;
-  top: 8vh;
-  left: 50%;
-  width: min(92vw, 460px);
-  transform: translateX(-50%);
-  padding: 20px 22px;
-  border-radius: 16px;
-  background: #fff;
-  border-top: 8px solid #e5232d;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-}
-
-.guard-title {
-  margin: 0 0 6px;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #c0392b;
-}
-
-.guard-text {
-  margin: 0 0 12px;
-  font-size: 0.95rem;
-  line-height: 1.5;
-}
-
-.guard-bar {
-  height: 10px;
-  border-radius: 6px;
-  background: #f3d3d1;
-  overflow: hidden;
-}
-
-.guard-fill {
-  height: 100%;
-  width: 100%;
-  background: #e5232d;
-}
-
-.guard-btn {
-  position: absolute;
-  left: 50%;
-  top: 65%;
-  transform: translate(-50%, -50%);
-  padding: 16px 26px;
-  border: 0;
-  border-radius: 14px;
-  background: var(--saffron);
-  color: var(--ink);
-  font: inherit;
-  font-size: 1.1rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-}
-
-/* ---------- 날아다니는 클릭 버튼 ---------- */
-.earn-ph { flex: 1 1 220px; }
-
-.btn.flying {
-  position: fixed;
-  left: 0;
-  top: 0;
-  z-index: 40;
-  width: 170px;
-  height: 64px;
-  padding: 0;
-  flex: none;
-  font-size: 1.1rem;
-  box-shadow: 0 8px 20px rgba(27, 37, 89, 0.4);
-  will-change: transform;
-}
-
 /* ---------- 지도 ---------- */
 .map-dialog {
   width: min(96vw, 960px);
@@ -650,7 +559,6 @@ button:focus-visible {
 .map-caption span { color: var(--ink-soft); }
 
 @media (max-width: 520px) {
-  .guard-info { margin-left: 18px; margin-right: 18px; }
   .map-btn { padding: 6px 14px; }
 }
 
@@ -925,6 +833,10 @@ button:focus-visible {
 
   .dock button { flex: 1; max-width: 130px; width: auto; padding: 12px 6px; box-shadow: none; }
 
+  /* 아래로 스크롤하면 아래로 미끄러져 숨고, 위로 올리면 부드럽게 나타나요 */
+  .dock { transition: transform 0.28s ease; will-change: transform; }
+  .dock.dock-hidden { transform: translateY(115%); }
+
   body { padding-bottom: 84px; }
 }
 
@@ -1142,4 +1054,45 @@ button:focus-visible {
   .perk-info { margin-left: 18px; margin-right: 18px; }
   .shop-item { flex-direction: column; align-items: stretch; }
   .head-buttons { flex-direction: column; gap: 6px; }
+}
+
+/* ---------- 자동 클릭 감지: 모든 화면을 덮는 빨간 화면 ---------- */
+.kick {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #d90000;
+  color: #fff;
+  text-align: center;
+}
+
+.kick[hidden] { display: none; }
+
+.kick-title {
+  margin: 0 0 12px;
+  font-family: "Black Han Sans", "Noto Sans KR", sans-serif;
+  font-size: clamp(2.2rem, 9vw, 4rem);
+  line-height: 1.2;
+}
+
+.kick-text { margin: 0; font-size: clamp(1rem, 3.6vw, 1.4rem); font-weight: 700; line-height: 1.5; }
+
+html.kicked, html.kicked body { overflow: hidden; }
+
+/* ---------- 폭죽 ---------- */
+.confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock { transition: none; }
 }
